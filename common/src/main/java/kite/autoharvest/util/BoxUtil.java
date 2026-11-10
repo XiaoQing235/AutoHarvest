@@ -33,14 +33,15 @@ public class BoxUtil {
     }
 
     public static boolean isOutsideSphere(BlockPos pos, Vec3 center, double radius) {
-        return !center.closerThan(Vec3.atCenterOf(pos), radius);
+        double dx = pos.getX() + 0.5 - center.x;
+        double dy = pos.getY() + 0.5 - center.y;
+        double dz = pos.getZ() + 0.5 - center.z;
+        return dx * dx + dy * dy + dz * dz >= radius * radius;
     }
 
     public static void forEachBlockInRange(Vec3 playerPos, double radius, Predicate<BlockPos> action) {
-        AABB searchBox = createSearchBox(playerPos, radius);
         int radiusInt = (int) Math.ceil(radius);
         for (BlockPos pos : BlockPos.withinManhattan(BlockPos.containing(playerPos), radiusInt, radiusInt, radiusInt)) {
-            if (!searchBox.contains(Vec3.atCenterOf(pos))) continue;
             if (isOutsideSphere(pos, playerPos, radius)) continue;
             if (action.test(pos)) return;
         }

@@ -8,6 +8,7 @@ import kite.autoharvest.util.WaterProximityChecker;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.Direction;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Item;
@@ -47,15 +48,15 @@ public class HoeMode implements AutoMode {
 
         double radius = AutoHarvestConfig.getInstance().getRadius();
 
-        boolean[] hasValidBlock = {false};
+        BlockPos[] target = {null};
         BoxUtil.forEachBlockInRange(playerPos, radius, pos -> {
             if (!HOEABLE_BLOCKS.contains(world.getBlockState(pos).getBlock())) return false;
             if (!world.getBlockState(pos.above()).isAir()) return false;
             if (AutoHarvestConfig.skipWater() && WaterProximityChecker.hasNoWaterNearby(world, pos)) return false;
-            hasValidBlock[0] = true;
+            target[0] = pos.immutable();
             return true;
         });
-        if (!hasValidBlock[0]) {
+        if (target[0] == null) {
             return;
         }
 
@@ -67,14 +68,7 @@ public class HoeMode implements AutoMode {
             }
             return;
         }
-        BoxUtil.forEachBlockInRange(playerPos, radius, pos -> {
-            if (!HOEABLE_BLOCKS.contains(world.getBlockState(pos).getBlock())) return false;
-            if (!world.getBlockState(pos.above()).isAir()) return false;
-            if (AutoHarvestConfig.skipWater() && WaterProximityChecker.hasNoWaterNearby(world, pos)) return false;
-
-            InteractionHelper.interactBlock(player, pos, usedHand, Direction.UP);
-            return true;
-        });
+        InteractionHelper.interactBlock(player, target[0], usedHand, Direction.UP);
     }
 
     private InteractionHand getHoeInHand(LocalPlayer player) {

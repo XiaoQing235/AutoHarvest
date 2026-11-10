@@ -4,6 +4,7 @@ import kite.autoharvest.config.AutoHarvestConfig;
 import kite.autoharvest.mode.AutoMode;
 import kite.autoharvest.util.BoxUtil;
 import kite.autoharvest.util.InteractionHelper;
+import kite.autoharvest.util.InteractionRange;
 import kite.autoharvest.util.ItemRefillHelper;
 import kite.autoharvest.util.ItemSlotHelper;
 import net.minecraft.client.Minecraft;
@@ -30,9 +31,10 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
-import net.minecraft.world.phys.Vec3;
 
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
@@ -57,11 +59,24 @@ public class FarmerMode implements AutoMode {
 
     private static final Set<Item> REFILLABLE_SEEDS = Set.copyOf(CROP_TO_SEED.values());
 
-    private boolean pendingBreak = false;
-    private BlockPos targetPos = null;
-    private Item targetSeed = null;
-    private boolean targetInteract = false;
-    private final Map<BlockPos, Item> pendingPlant = new HashMap<>();
+    private static final int MAX_PENDING_PLANTS = 512;
+    private static final long BREAK_OBSERVATION_TIMEOUT_TICKS = 10;
+    private static final long PLANT_EXPIRY_TICKS = 1200;
+    private static final long PLANT_RETRY_TICKS = 10;
+    private static final long PLANT_PREDICTION_GRACE_TICKS = 40;
+
+    private boolean pendingBreak;
+    private BlockPos targetPos;
+    private Item targetSeed;
+    private Block targetBlock;
+    private boolean targetInteract;
+    private ClientLevel activeWorld;
+    private Holder<Enchantment> fortuneHolder;
+    private final BoxUtil.ScanCursor scanCursor = new BoxUtil.ScanCursor();
+    private final Map<BlockPos, PendingPlant> pendingPlant = new HashMap<>();
+
+    private record PendingPlant(Item seed, BlockState harvestedState, long expiresAt,
+                                long retryAt, boolean observedAir, long observedPlantAt) {}
 
     @Override
     public void tick() {
@@ -69,6 +84,10 @@ public class FarmerMode implements AutoMode {
         ClientLevel world = client.level;
         LocalPlayer player = client.player;
         if (world == null || player == null) return;
+        if (world != activeWorld) {
+            onDisable();
+            activeWorld = world;
+        }
 
         if (AutoHarvestConfig.enableRefill() && !player.isCreative() && !player.isSpectator()) {
             ItemStack mainStack = player.getMainHandItem();
@@ -81,107 +100,182 @@ public class FarmerMode implements AutoMode {
             }
         }
 
-        if (pendingBreak && targetPos != null) {
-            executeHarvest();
-            pendingBreak = false;
-            if (targetSeed != null) {
-                pendingPlant.put(targetPos, targetSeed);
+        // One budget for all world operations: planting, breaking and berry picking.
+        // Inventory changes are not world operations. A Fortune switch always waits
+        // until the next scheduled mode tick; increasing this budget cannot skip it.
+        int budget = AutoHarvestConfig.maxActionsPerTick();
+        Set<BlockPos> attempted = new HashSet<>();
+        prunePendingPlants(world);
+        if (pendingBreak) {
+            if (isTargetValid(world, player)) {
+                int fortuneSlot = findFortuneToolSlotIfEnabled(player);
+                if (switchFortuneTool(player, fortuneSlot)) return;
+                attempted.add(targetPos);
+                if (executeHarvest(world, player)) budget--;
             }
-            targetPos = null;
-            targetSeed = null;
-            return;
+            clearTarget();
+        } else {
+            budget -= processPendingPlant(world, player, budget, attempted);
         }
-
-        processPendingPlant(player);
-        scanAndHarvest(world, player);
+        if (budget > 0) scanAndHarvest(world, player, budget, attempted);
     }
 
-    private void processPendingPlant(LocalPlayer player) {
-        if (pendingPlant.isEmpty()) return;
+    private void prunePendingPlants(ClientLevel world) {
+        long now = world.getGameTime();
+        pendingPlant.entrySet().removeIf(entry -> {
+            PendingPlant pending = entry.getValue();
+            BlockState current = world.getBlockState(entry.getKey());
+            if (current.isAir()) {
+                if (!pending.observedAir()) {
+                    // Observe air before the short break deadline: scheduled mode
+                    // ticks may be farther apart. Missing seeds retain this job.
+                    entry.setValue(new PendingPlant(pending.seed(), pending.harvestedState(),
+                            now + PLANT_EXPIRY_TICKS, pending.retryAt(), true, -1));
+                    return false;
+                }
+                if (now >= pending.expiresAt()) return true;
+                if (pending.observedPlantAt() >= 0) {
+                    // Predicted planting rolled back. Keep the existing placement
+                    // backoff and lifetime, but restart the observation grace.
+                    entry.setValue(new PendingPlant(pending.seed(), pending.harvestedState(),
+                            pending.expiresAt(), pending.retryAt(), true, -1));
+                }
+                return false;
+            }
+            if (now >= pending.expiresAt()) return true;
+            if (!pending.observedAir()) {
+                return current != pending.harvestedState();
+            }
+            // A mature original crop may be a reverted break or a regrown crop;
+            // release it for harvesting. An unrelated block invalidates the job.
+            if (current == pending.harvestedState()
+                    || !current.is(pending.harvestedState().getBlock())) return true;
+            // Client state is not server confirmation. Watch a matching planted
+            // crop for a bounded grace period to tolerate common prediction rollbacks.
+            if (pending.observedPlantAt() < 0) {
+                entry.setValue(new PendingPlant(pending.seed(), pending.harvestedState(),
+                        pending.expiresAt(), pending.retryAt(), true, now));
+                return false;
+            }
+            return now - pending.observedPlantAt() >= PLANT_PREDICTION_GRACE_TICKS;
+        });
+    }
 
-        double range = AutoHarvestConfig.getInstance().getRadius();
-        double rangeSq = range * range;
-
-        for (Map.Entry<BlockPos, Item> entry : pendingPlant.entrySet()) {
+    private int processPendingPlant(ClientLevel world, LocalPlayer player, int budget, Set<BlockPos> attempted) {
+        int actions = 0;
+        long now = world.getGameTime();
+        Iterator<Map.Entry<BlockPos, PendingPlant>> iterator = pendingPlant.entrySet().iterator();
+        while (iterator.hasNext() && actions < budget) {
+            Map.Entry<BlockPos, PendingPlant> entry = iterator.next();
             BlockPos pos = entry.getKey();
-
-            if (!player.level().getBlockState(pos).isAir()) continue;
-            if (player.distanceToSqr(Vec3.atCenterOf(pos)) > rangeSq) continue;
-            if (!isPlantableBelow(player, pos, entry.getValue())) continue;
-
-            Item seed = entry.getValue();
-            if (doPlant(player, pos, seed)) return;
+            PendingPlant pending = entry.getValue();
+            if (!world.getBlockState(pos).isAir()) continue;
+            if (!isPlantableBelow(player, pos, pending.seed())) {
+                iterator.remove();
+                continue;
+            }
+            if (now < pending.retryAt() || !isWithinSelectionRange(player, pos)
+                    || !InteractionRange.canReachBlock(player, pos.below())) continue;
+            if (doPlant(player, pos, pending.seed())) {
+                attempted.add(pos);
+                actions++;
+                entry.setValue(new PendingPlant(pending.seed(), pending.harvestedState(),
+                        pending.expiresAt(), now + PLANT_RETRY_TICKS, pending.observedAir(),
+                        pending.observedPlantAt()));
+            }
         }
+        return actions;
     }
 
     private boolean isPlantableBelow(LocalPlayer player, BlockPos pos, Item seed) {
         Block below = player.level().getBlockState(pos.below()).getBlock();
-        if (seed == Items.NETHER_WART) {
-            return below == Blocks.SOUL_SAND;
-        }
-        return below == Blocks.FARMLAND;
+        return seed == Items.NETHER_WART ? below == Blocks.SOUL_SAND : below == Blocks.FARMLAND;
     }
 
-    private void scanAndHarvest(ClientLevel world, LocalPlayer player) {
-        Vec3 playerPos = BoxUtil.getPlayerPos();
-        if (playerPos == null) return;
-
-        double radius = AutoHarvestConfig.getInstance().getRadius();
-        int radiusInt = (int) Math.ceil(radius);
-
-        for (BlockPos pos : BlockPos.withinManhattan(BlockPos.containing(playerPos), radiusInt, radiusInt, radiusInt)) {
-            if (BoxUtil.isOutsideSphere(pos, playerPos, radius)) continue;
-
+    private void scanAndHarvest(ClientLevel world, LocalPlayer player, int budget, Set<BlockPos> attempted) {
+        int[] remaining = {budget};
+        // Resolve Fortune once, lazily, after planting has finished changing slots.
+        int[] fortuneSlot = {-2};
+        BoxUtil.forEachBlockInRange(InteractionRange.scanCenter(player),
+                InteractionRange.blockScanRadius(player), scanCursor, pos -> {
             BlockState state = world.getBlockState(pos);
             Block block = state.getBlock();
-
-            if (!HARVEST_CROPS.contains(block)) continue;
-
+            if (!HARVEST_CROPS.contains(block)) return false;
+            if (CROP_TO_SEED.containsKey(block) && pendingPlant.size() >= MAX_PENDING_PLANTS) return false;
+            BlockPos harvestPos = pos;
             if (block == Blocks.SUGAR_CANE) {
-                if (world.getBlockState(pos.below()).is(Blocks.SUGAR_CANE)) continue;
-                if (!world.getBlockState(pos.above()).is(Blocks.SUGAR_CANE)) continue;
-
-                targetPos = pos.above();
-                targetSeed = null;
-                targetInteract = false;
-            } else if (block == Blocks.SWEET_BERRY_BUSH) {
-                if (isNotFullyGrown(state, block)) continue;
-
-                targetPos = pos;
-                targetSeed = null;
-                targetInteract = true;
-            } else {
-                if (isNotFullyGrown(state, block)) continue;
-
-                targetPos = pos;
-                targetSeed = CROP_TO_SEED.get(block);
-                targetInteract = false;
+                if (world.getBlockState(pos.below()).is(Blocks.SUGAR_CANE)
+                        || !world.getBlockState(pos.above()).is(Blocks.SUGAR_CANE)) return false;
+                harvestPos = pos.above();
+            } else if (isNotFullyGrown(state, block)) {
+                return false;
             }
-            checkFortuneAndHarvest(player);
-            return;
-        }
+            if (attempted.contains(harvestPos) || pendingPlant.containsKey(harvestPos)
+                    || !InteractionRange.canReachBlock(player, harvestPos)) return false;
+
+            // Scan iterators reuse mutable positions; queued targets must own a copy.
+            targetPos = harvestPos.immutable();
+            targetBlock = block;
+            targetSeed = CROP_TO_SEED.get(block);
+            targetInteract = block == Blocks.SWEET_BERRY_BUSH;
+            if (fortuneSlot[0] == -2) fortuneSlot[0] = findFortuneToolSlotIfEnabled(player);
+            if (switchFortuneTool(player, fortuneSlot[0])) {
+                pendingBreak = true;
+                return true;
+            }
+            attempted.add(targetPos);
+            if (executeHarvest(world, player)) remaining[0]--;
+            clearTarget();
+            return remaining[0] <= 0;
+        });
     }
 
-    private void checkFortuneAndHarvest(LocalPlayer player) {
-        if (needsFortuneSwitch(player)) {
-            ensureFortuneTool(player);
-            pendingBreak = true;
-            return;
+    private boolean isTargetValid(ClientLevel world, LocalPlayer player) {
+        if (targetPos == null || !InteractionRange.canReachBlock(player, targetPos)) return false;
+        BlockPos scanPos = targetBlock == Blocks.SUGAR_CANE ? targetPos.below() : targetPos;
+        if (!isWithinSelectionRange(player, scanPos)) return false;
+        BlockState state = world.getBlockState(targetPos);
+        if (!state.is(targetBlock)) return false;
+        if (targetBlock == Blocks.SUGAR_CANE) return world.getBlockState(targetPos.below()).is(Blocks.SUGAR_CANE);
+        return !isNotFullyGrown(state, targetBlock);
+    }
+
+    private boolean isWithinSelectionRange(LocalPlayer player, BlockPos pos) {
+        return AutoHarvestConfig.usePlayerRange()
+                || !BoxUtil.isOutsideSphere(pos, player.position(), InteractionRange.blockRadius(player));
+    }
+
+    private boolean executeHarvest(ClientLevel world, LocalPlayer player) {
+        // Also guard deferred Fortune targets: never harvest a seed crop if its
+        // replant job cannot be retained. Berry/cane operations need no entry.
+        if (targetSeed != null && pendingPlant.size() >= MAX_PENDING_PLANTS) return false;
+        BlockState state = world.getBlockState(targetPos);
+        boolean dispatched = targetInteract
+                ? InteractionHelper.interactBlock(player, targetPos, InteractionHand.MAIN_HAND, Direction.UP)
+                : InteractionHelper.breakBlock(targetPos, Direction.UP);
+        if (dispatched && targetSeed != null) {
+            pendingPlant.put(targetPos, new PendingPlant(targetSeed, state,
+                    world.getGameTime() + BREAK_OBSERVATION_TIMEOUT_TICKS, 0, false, -1));
         }
-        executeHarvest();
-        if (targetSeed != null) {
-            pendingPlant.put(targetPos, targetSeed);
-        }
+        return dispatched;
+    }
+
+    private void clearTarget() {
+        pendingBreak = false;
         targetPos = null;
         targetSeed = null;
+        targetBlock = null;
+        targetInteract = false;
     }
 
-    private void executeHarvest() {
-        if (targetInteract) {
-            InteractionHelper.interactBlock(BoxUtil.getPlayer(), targetPos, InteractionHand.MAIN_HAND, Direction.UP);
-        } else {
-            InteractionHelper.breakBlock(targetPos, Direction.UP);
-        }
+    private int findFortuneToolSlotIfEnabled(LocalPlayer player) {
+        return AutoHarvestConfig.autoSwitchFortuneTool() ? findFortuneToolSlot(player) : -1;
+    }
+
+    private boolean switchFortuneTool(LocalPlayer player, int slot) {
+        if (slot < 0 || player.getInventory().getSelectedSlot() == slot) return false;
+        player.getInventory().setSelectedSlot(slot);
+        return true;
     }
 
     private int findSeedSlot(LocalPlayer player, Item seed) {
@@ -208,8 +302,7 @@ public class FarmerMode implements AutoMode {
 
         boolean offhand = AutoHarvestConfig.farmerOffhandPlant();
         ensureSeedAvailable(player, slot, offhand);
-        InteractionHelper.interactBlock(player, pos.below(), offhand ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND, Direction.UP);
-        return true;
+        return InteractionHelper.interactBlock(player, pos.below(), offhand ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND, Direction.UP);
     }
 
     private void ensureSeedAvailable(LocalPlayer player, int slot, boolean offhand) {
@@ -234,7 +327,7 @@ public class FarmerMode implements AutoMode {
         }
 
         int hotbarSlot = findHotbarInsertSlot(player);
-        swapContainerSlots(player.containerMenu, slot, hotbarSlot);
+        swapContainerSlots(player.containerMenu, slot, hotbarSlot + 36);
         player.getInventory().setSelectedSlot(hotbarSlot);
     }
 
@@ -264,70 +357,43 @@ public class FarmerMode implements AutoMode {
         for (int i = 0; i < 9; i++) {
             if (player.getInventory().getItem(i).isEmpty()) return i;
         }
+        Holder<Enchantment> fortuneHolder = fortuneHolder(player);
         for (int i = 0; i < 9; i++) {
-            if (!isFortuneTool(player.getInventory().getItem(i))) return i;
+            if (!isFortuneTool(player.getInventory().getItem(i), fortuneHolder)) return i;
         }
         return 0;
     }
 
-    private boolean needsFortuneSwitch(LocalPlayer player) {
-        if (!AutoHarvestConfig.autoSwitchFortuneTool()) return false;
-        int fortuneSlot = findFortuneToolSlot(player);
-        return fortuneSlot != -1 && player.getInventory().getSelectedSlot() != fortuneSlot;
-    }
-
-    private void ensureFortuneTool(LocalPlayer player) {
-        if (!AutoHarvestConfig.autoSwitchFortuneTool()) return;
-        int fortuneSlot = findFortuneToolSlot(player);
-        if (fortuneSlot != -1) {
-            player.getInventory().setSelectedSlot(fortuneSlot);
-        }
-    }
-
     private int findFortuneToolSlot(LocalPlayer player) {
-        Holder<Enchantment> fortuneHolder = player.level()
-                .registryAccess()
-                .lookupOrThrow(Registries.ENCHANTMENT)
-                .getOrThrow(Enchantments.FORTUNE);
+        Holder<Enchantment> fortuneHolder = fortuneHolder(player);
 
         for (int i = 0; i < 9; i++) {
             ItemStack stack = player.getInventory().getItem(i);
             if (stack.isEmpty()) continue;
 
-            if (isHarvestTool(stack.getItem())) {
-                ItemEnchantments enchantments =
-                        stack.getOrDefault(DataComponents.ENCHANTMENTS, ItemEnchantments.EMPTY);
-                if (enchantments.getLevel(fortuneHolder) >= 1) {
-                    return i;
-                }
-            }
+            if (isFortuneTool(stack, fortuneHolder)) return i;
         }
         return -1;
     }
 
-    private boolean isHarvestTool(Item item) {
-        if (item == null) return false;
-        ItemStack stack = new ItemStack(item);
+    private boolean isHarvestTool(ItemStack stack) {
         return stack.is(ItemTags.AXES) ||
                 stack.is(ItemTags.SHOVELS) ||
                 stack.is(ItemTags.HOES) ||
                 stack.is(ItemTags.PICKAXES);
     }
 
-    private boolean isFortuneTool(ItemStack stack) {
-        if (stack.isEmpty()) return false;
-        if (!isHarvestTool(stack.getItem())) return false;
+    private Holder<Enchantment> fortuneHolder(LocalPlayer player) {
+        if (fortuneHolder == null) {
+            fortuneHolder = player.level().registryAccess()
+                    .lookupOrThrow(Registries.ENCHANTMENT).getOrThrow(Enchantments.FORTUNE);
+        }
+        return fortuneHolder;
+    }
 
-        LocalPlayer player = BoxUtil.getPlayer();
-        if (player == null) return false;
-
-        Holder<Enchantment> fortuneHolder = player.level()
-                .registryAccess()
-                .lookupOrThrow(Registries.ENCHANTMENT)
-                .getOrThrow(Enchantments.FORTUNE);
-
-        ItemEnchantments enchantments =
-                stack.getOrDefault(DataComponents.ENCHANTMENTS, ItemEnchantments.EMPTY);
+    private boolean isFortuneTool(ItemStack stack, Holder<Enchantment> fortuneHolder) {
+        if (stack.isEmpty() || !isHarvestTool(stack)) return false;
+        ItemEnchantments enchantments = stack.getOrDefault(DataComponents.ENCHANTMENTS, ItemEnchantments.EMPTY);
         return enchantments.getLevel(fortuneHolder) >= 1;
     }
 
@@ -353,9 +419,10 @@ public class FarmerMode implements AutoMode {
 
     @Override
     public void onDisable() {
-        pendingBreak = false;
-        targetPos = null;
-        targetSeed = null;
+        clearTarget();
         pendingPlant.clear();
+        scanCursor.reset();
+        activeWorld = null;
+        fortuneHolder = null;
     }
 }

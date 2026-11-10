@@ -21,6 +21,8 @@ import java.util.Set;
 
 public class PlantMode implements AutoMode {
 
+    private final BoxUtil.ScanCursor scanCursor = new BoxUtil.ScanCursor();
+
     private static final Set<Item> CROP_SEEDS = Set.of(
             Items.WHEAT_SEEDS,
             Items.CARROT,
@@ -107,23 +109,28 @@ public class PlantMode implements AutoMode {
         LocalPlayer player = BoxUtil.getPlayer();
         if (world == null || player == null) return;
 
-        Vec3 playerPos = BoxUtil.getPlayerPos();
+        Vec3 playerPos = InteractionRange.scanCenter(player);
         if (playerPos == null) return;
 
-        double radius = AutoHarvestConfig.getInstance().getRadius();
+        double radius = InteractionRange.blockScanRadius(player);
 
-        BoxUtil.forEachBlockInRange(playerPos, radius, pos -> {
+        boolean cropSeedsAvailable = hasSeed(player, CROP_SEEDS);
+        boolean sugarCaneAvailable = hasSeed(player, SUGAR_CANE_SET);
+        boolean bambooAvailable = hasSeed(player, BAMBOO_SET);
+        int[] actions = {0};
+        int limit = AutoHarvestConfig.maxActionsPerTick();
+        BoxUtil.forEachBlockInRange(playerPos, radius, scanCursor, pos -> {
             if (!world.getBlockState(pos).isAir()) return false;
 
             BlockPos basePos = pos.below();
             Block baseBlock = world.getBlockState(basePos).getBlock();
 
-            boolean canPlantCrop = (baseBlock == Blocks.FARMLAND) && hasSeed(player, CROP_SEEDS);
+            boolean canPlantCrop = (baseBlock == Blocks.FARMLAND) && cropSeedsAvailable;
             boolean canPlantSugarcane = SUGARCANE_BASE_BLOCKS.contains(baseBlock)
-                    && WaterProximityChecker.isAdjacentToSourceWaterHorizontally(world, basePos)
-                    && hasSeed(player, SUGAR_CANE_SET);
+                    && sugarCaneAvailable
+                    && WaterProximityChecker.isAdjacentToSourceWaterHorizontally(world, basePos);
             boolean canPlantNetherWart = (baseBlock == Blocks.SOUL_SAND);
-            boolean canPlantBamboo = SUGARCANE_BASE_BLOCKS.contains(baseBlock) && hasSeed(player, BAMBOO_SET);
+            boolean canPlantBamboo = SUGARCANE_BASE_BLOCKS.contains(baseBlock) && bambooAvailable;
             Direction cocoaFacing = null;
             BlockPos cocoaLogPos = null;
 
@@ -183,24 +190,17 @@ public class PlantMode implements AutoMode {
                 usedHand = InteractionHand.OFF_HAND;
             }
 
-            if (usedHand != null) {
-                if (canPlantCocoa) {
-                    InteractionHelper.interactBlock(player, cocoaLogPos, usedHand, cocoaFacing);
-                } else {
-                    InteractionHelper.interactBlock(player, basePos, usedHand, Direction.UP);
-                }
-                return true;
+            if (usedHand == null) {
+                if (!AutoHarvestConfig.autoSwitchHotbar()) return false;
+                int bestSlot = ItemSlotHelper.findNearestSlot(player, targetSeed);
+                if (bestSlot == -1) return false;
+                player.getInventory().setSelectedSlot(bestSlot);
+                usedHand = InteractionHand.MAIN_HAND;
             }
-            int bestSlot = ItemSlotHelper.findNearestSlot(player, targetSeed);
-
-            if (bestSlot != -1) {
-                if (AutoHarvestConfig.autoSwitchHotbar()) {
-                    player.getInventory().setSelectedSlot(bestSlot);
-                }
-                InteractionHelper.interactBlock(player, basePos, InteractionHand.MAIN_HAND, Direction.UP);
-                return true;
-            }
-            return false;
+            boolean attempted = canPlantCocoa
+                    ? InteractionHelper.interactBlock(player, cocoaLogPos, usedHand, cocoaFacing)
+                    : InteractionHelper.interactBlock(player, basePos, usedHand, Direction.UP);
+            return attempted && ++actions[0] >= limit;
         });
     }
 
@@ -222,6 +222,6 @@ public class PlantMode implements AutoMode {
 
     @Override
     public void onDisable() {
-        //nothing
+        scanCursor.reset();
     }
 }

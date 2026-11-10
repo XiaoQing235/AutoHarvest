@@ -2,13 +2,13 @@ package kite.autoharvest.mode;
 
 import kite.autoharvest.config.AutoHarvestConfig;
 import kite.autoharvest.util.BoxUtil;
+import kite.autoharvest.util.InteractionRange;
 import kite.autoharvest.util.InteractionHelper;
 import kite.autoharvest.util.ItemSlotHelper;
 import kite.autoharvest.util.WaterProximityChecker;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.Direction;
-import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Item;
@@ -20,6 +20,8 @@ import net.minecraft.world.phys.Vec3;
 import java.util.Set;
 
 public class HoeMode implements AutoMode {
+
+    private final BoxUtil.ScanCursor scanCursor = new BoxUtil.ScanCursor();
 
     private static final Set<Block> HOEABLE_BLOCKS = Set.of(
             Blocks.DIRT,
@@ -43,32 +45,31 @@ public class HoeMode implements AutoMode {
         LocalPlayer player = BoxUtil.getPlayer();
         if (world == null || player == null) return;
 
-        Vec3 playerPos = BoxUtil.getPlayerPos();
+        Vec3 playerPos = InteractionRange.scanCenter(player);
         if (playerPos == null) return;
 
-        double radius = AutoHarvestConfig.getInstance().getRadius();
+        double radius = InteractionRange.blockScanRadius(player);
 
-        BlockPos[] target = {null};
-        BoxUtil.forEachBlockInRange(playerPos, radius, pos -> {
+        int[] actions = {0};
+        int limit = AutoHarvestConfig.maxActionsPerTick();
+        BoxUtil.forEachBlockInRange(playerPos, radius, scanCursor, pos -> {
             if (!HOEABLE_BLOCKS.contains(world.getBlockState(pos).getBlock())) return false;
             if (!world.getBlockState(pos.above()).isAir()) return false;
+            if (!InteractionRange.canReachBlock(player, pos)) return false;
             if (AutoHarvestConfig.skipWater() && WaterProximityChecker.hasNoWaterNearby(world, pos)) return false;
-            target[0] = pos.immutable();
-            return true;
-        });
-        if (target[0] == null) {
-            return;
-        }
 
-        InteractionHand usedHand = getHoeInHand(player);
-        if (usedHand == null) {
-            int bestSlot = ItemSlotHelper.findNearestSlot(player, HOES, true);
-            if (bestSlot != -1 && AutoHarvestConfig.autoSwitchHotbar()) {
-                player.getInventory().setSelectedSlot(bestSlot);
+            InteractionHand usedHand = getHoeInHand(player);
+            if (usedHand == null) {
+                int bestSlot = ItemSlotHelper.findNearestSlot(player, HOES, true);
+                if (bestSlot != -1 && AutoHarvestConfig.autoSwitchHotbar()) {
+                    player.getInventory().setSelectedSlot(bestSlot);
+                }
+                // Keep the existing one-tick delay after a hotbar switch.
+                return true;
             }
-            return;
-        }
-        InteractionHelper.interactBlock(player, target[0], usedHand, Direction.UP);
+            return InteractionHelper.interactBlock(player, pos, usedHand, Direction.UP)
+                    && ++actions[0] >= limit;
+        });
     }
 
     private InteractionHand getHoeInHand(LocalPlayer player) {
@@ -88,6 +89,6 @@ public class HoeMode implements AutoMode {
 
     @Override
     public void onDisable() {
-        // nothing
+        scanCursor.reset();
     }
 }

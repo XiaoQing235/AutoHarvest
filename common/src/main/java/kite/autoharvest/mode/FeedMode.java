@@ -52,23 +52,26 @@ public class FeedMode implements AutoMode {
     private static long lastCleanupTime = 0;
     private static final long CLEANUP_INTERVAL_MS = 5_000L;
 
-    private boolean isOnCooldown(Entity entity) {
+    private boolean isOnCooldown(Entity entity, long now, long cooldown) {
         Long lastInteract = INTERACT_COOLDOWN.get(entity.getUUID());
-        if (lastInteract == null) return false;
-        return (System.currentTimeMillis() - lastInteract) < COOLDOWN_MS();
+        return lastInteract != null && now - lastInteract < cooldown;
     }
 
-    private void markAsInteracted(Entity entity) {
-        INTERACT_COOLDOWN.put(entity.getUUID(), System.currentTimeMillis());
-    }
-
-    private void cleanupCooldownCache() {
-        long now = System.currentTimeMillis();
-        if (now - lastCleanupTime < CLEANUP_INTERVAL_MS) {
-            return;
-        }
-        INTERACT_COOLDOWN.entrySet().removeIf(entry -> now - entry.getValue() >= COOLDOWN_MS());
+    private void cleanupCooldownCache(long now, long cooldown) {
+        if (now - lastCleanupTime < CLEANUP_INTERVAL_MS) return;
+        INTERACT_COOLDOWN.entrySet().removeIf(entry -> now - entry.getValue() >= cooldown);
         lastCleanupTime = now;
+    }
+
+    // Initialize with Animals on first use, not during early mode registration.
+    private static final class BreedFoods {
+        private static final Set<Item> ALL = collect();
+
+        private static Set<Item> collect() {
+            Set<Item> foods = new HashSet<>();
+            for (Set<Item> items : Animals.BREEDABLE_WHITELIST.values()) foods.addAll(items);
+            return Set.copyOf(foods);
+        }
     }
 
     private boolean canBreed(Entity entity) {
@@ -80,31 +83,37 @@ public class FeedMode implements AutoMode {
 
     @Override
     public void tick() {
-        var BREEDABLE_WHITELIST = Animals.BREEDABLE_WHITELIST;
-        cleanupCooldownCache();
+        var breedableWhitelist = Animals.BREEDABLE_WHITELIST;
+        long now = System.currentTimeMillis();
+        long cooldown = COOLDOWN_MS();
+        cleanupCooldownCache(now, cooldown);
 
         ClientLevel world = BoxUtil.getWorld();
         LocalPlayer player = BoxUtil.getPlayer();
         if (world == null || player == null) return;
 
-        Vec3 playerPos = BoxUtil.getPlayerPos();
-        if (playerPos == null) return;
+        int limit = AutoHarvestConfig.maxActionsPerTick();
+        int actions = 0;
+        Vec3 center = InteractionRange.scanCenter(player);
+        double radius = InteractionRange.entityRadius(player);
+        AABB searchBox = BoxUtil.createSearchBox(center, radius);
         ItemStack mainHand = player.getMainHandItem();
         ItemStack offHand = player.getOffhandItem();
         boolean holdingShears = mainHand.is(Items.SHEARS) || offHand.is(Items.SHEARS);
 
         if (holdingShears) {
-            double radius = AutoHarvestConfig.getInstance().getRadius();
-            AABB searchBox = BoxUtil.createSearchBox(playerPos, radius);
             List<Entity> sheepList = world.getEntities(player, searchBox, entity ->
-                    entity instanceof Sheep && ((Sheep) entity).readyForShearing()
-            );
+                    entity instanceof Sheep sheep && sheep.readyForShearing()
+                            && InteractionRange.canReachEntity(player, entity));
             sheepList.sort(Comparator.comparingDouble(e -> e.distanceToSqr(player)));
-
             for (Entity sheep : sheepList) {
-                InteractionHand hand = mainHand.is(Items.SHEARS) ? InteractionHand.MAIN_HAND : InteractionHand.OFF_HAND;
-                InteractionHelper.interactEntity(player, sheep, hand);
-                return;
+                InteractionHand hand;
+                if (player.getMainHandItem().is(Items.SHEARS)) hand = InteractionHand.MAIN_HAND;
+                else if (player.getOffhandItem().is(Items.SHEARS)) hand = InteractionHand.OFF_HAND;
+                else break;
+                if (InteractionHelper.interactEntity(player, sheep, hand)) {
+                    if (++actions >= limit) break;
+                }
             }
             return;
         }
@@ -124,36 +133,25 @@ public class FeedMode implements AutoMode {
             }
         }
 
-        double radius = AutoHarvestConfig.getInstance().getRadius();
-        AABB searchBox = BoxUtil.createSearchBox(playerPos, radius);
-
         List<Entity> entities = world.getEntities(player, searchBox, entity -> {
-            Set<Item> foods = BREEDABLE_WHITELIST.get(entity.getClass());
-            return foods != null && canBreed(entity) && !isOnCooldown(entity);
+            Set<Item> foods = breedableWhitelist.get(entity.getClass());
+            return foods != null && canBreed(entity) && !isOnCooldown(entity, now, cooldown)
+                    && InteractionRange.canReachEntity(player, entity);
         });
-
         entities.sort(Comparator.comparingDouble(e -> e.distanceToSqr(player)));
 
         for (Entity target : entities) {
-            Set<Item> validFoods = BREEDABLE_WHITELIST.get(target.getClass());
-            if (validFoods == null || validFoods.isEmpty()) continue;
-            if (!canBreed(target)) continue;
-
+            Set<Item> validFoods = breedableWhitelist.get(target.getClass());
+            if (validFoods == null || validFoods.isEmpty() || !canBreed(target)) continue;
             if (tryFeedEntity(player, target, validFoods)) {
-                markAsInteracted(target);
-                return;
+                INTERACT_COOLDOWN.put(target.getUUID(), now);
+                if (++actions >= limit) break;
             }
         }
     }
 
     private boolean isBreedItem(Item item) {
-        var BREEDABLE_WHITELIST = Animals.BREEDABLE_WHITELIST;
-        for (Set<Item> foods : BREEDABLE_WHITELIST.values()) {
-            if (foods != null && foods.contains(item)) {
-                return true;
-            }
-        }
-        return false;
+        return BreedFoods.ALL.contains(item);
     }
 
     private boolean tryFeedEntity(LocalPlayer player, Entity target, Set<Item> validFoods) {
@@ -161,12 +159,10 @@ public class FeedMode implements AutoMode {
         ItemStack off = player.getOffhandItem();
 
         if (!main.isEmpty() && validFoods.contains(main.getItem())) {
-            InteractionHelper.interactEntity(player, target, InteractionHand.MAIN_HAND);
-            return true;
+            return InteractionHelper.interactEntity(player, target, InteractionHand.MAIN_HAND);
         }
         if (!off.isEmpty() && validFoods.contains(off.getItem())) {
-            InteractionHelper.interactEntity(player, target, InteractionHand.OFF_HAND);
-            return true;
+            return InteractionHelper.interactEntity(player, target, InteractionHand.OFF_HAND);
         }
 
         Item bestFood = findBestFood(player, validFoods);
@@ -177,8 +173,7 @@ public class FeedMode implements AutoMode {
         int bestSlot = ItemSlotHelper.findNearestSlot(player, bestFood);
         if (bestSlot != -1 && AutoHarvestConfig.autoSwitchHotbar()) {
             player.getInventory().setSelectedSlot(bestSlot);
-            InteractionHelper.interactEntity(player, target, InteractionHand.MAIN_HAND);
-            return true;
+            return InteractionHelper.interactEntity(player, target, InteractionHand.MAIN_HAND);
         }
 
 

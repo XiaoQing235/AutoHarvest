@@ -13,6 +13,17 @@ public class AutoHarvestConfig implements ConfigData {
     public int ticksPerAction = 1; // 默认每 1 tick 执行一次（即每秒 20 次）
 
     @ConfigEntry.Gui.Tooltip
+    @ConfigEntry.BoundedDiscrete(min = 1, max = 64)
+    public int maxActionsPerTick = 1;
+
+    @ConfigEntry.Gui.Tooltip
+    @ConfigEntry.Gui.EnumHandler
+    public RangeSource rangeSource = RangeSource.CUSTOM;
+
+    @ConfigEntry.Gui.Tooltip
+    public boolean swingHand = false;
+
+    @ConfigEntry.Gui.Tooltip
     @ConfigEntry.BoundedDiscrete(min = 10, max = 65)
     public int radiusCenti = 45; // 4.5 blocks
 
@@ -67,6 +78,18 @@ public class AutoHarvestConfig implements ConfigData {
 
     public static int ticksPerAction() {
         return getInstance().ticksPerAction;
+    }
+
+    public static int maxActionsPerTick() {
+        return Math.max(1, Math.min(64, getInstance().maxActionsPerTick));
+    }
+
+    public static boolean usePlayerRange() {
+        return getInstance().rangeSource == RangeSource.PLAYER_ATTRIBUTE;
+    }
+
+    public static boolean swingHand() {
+        return getInstance().swingHand;
     }
 
     public static double radius() {

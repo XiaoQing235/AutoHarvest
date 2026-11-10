@@ -24,7 +24,7 @@
   "text.autoconfig.autoharvest.option.fishingRodProtection": "魚竿保護",
   "text.autoconfig.autoharvest.option.fishingRodProtection.@Tooltip": "當魚竿耐久過低時，自動停止釣魚。",
   "text.autoconfig.autoharvest.option.radiusCenti": "互動半徑",
-  "text.autoconfig.autoharvest.option.radiusCenti.@Tooltip": "與方塊／實體互動的最大距離（單位：方塊）。例如：35 表示 3.5 格。",
+  "text.autoconfig.autoharvest.option.radiusCenti.@Tooltip": "自訂模式掃描半徑，單位為 0.1 格（10–65）。例如 45 = 4.5 格。玩家屬性模式保留此值但不使用。",
   "text.autoconfig.autoharvest.option.rememberMode": "記住上次模式",
   "text.autoconfig.autoharvest.option.rememberMode.@Tooltip": "啟用 AutoHarvest 時，自動恢復上次使用的模式。",
   "text.autoconfig.autoharvest.option.thecurrentMode": "目前模式",
@@ -32,7 +32,7 @@
   "text.autoconfig.autoharvest.option.bambooRadius": "種植模式竹子種植間隔",
   "text.autoconfig.autoharvest.option.bambooRadius.@Tooltip": "在種植模式下種植竹子時，兩棵竹子之間的間隔[§c僅檢測間隔，無法做到整齊排列§f]",
   "text.autoconfig.autoharvest.option.ticksPerAction": "操作間隔（遊戲刻）",
-  "text.autoconfig.autoharvest.option.ticksPerAction.@Tooltip": "每次操作之間的遊戲刻數。數值越小越快（1 刻 = 每 tick 執行一次）。",
+  "text.autoconfig.autoharvest.option.ticksPerAction.@Tooltip": "兩批操作之間的遊戲 tick 數，每批最多嘗試「單 tick 最大操作數」次。1 tick 為 1/20 秒。",
   "text.autoconfig.autoharvest.option.autoSwitchHotbar": "自動切換快捷欄",
   "text.autoconfig.autoharvest.option.autoSwitchHotbar.@Tooltip": "自動在快捷欄中切換至合適的物品，不適用於收割模式和釣魚模式",
   "text.autoconfig.autoharvest.title": "AutoHarvest 設定",
@@ -50,5 +50,13 @@
   "text.autoconfig.autoharvest.option.skipwater": "不檢查水源",
   "text.autoconfig.autoharvest.option.skipwater.@Tooltip": "鋤地模式不檢查周圍是否存在水源",
   "text.autoconfig.autoharvest.option.farmerOffhandPlant": "農夫模式副手種植",
-  "text.autoconfig.autoharvest.option.farmerOffhandPlant.@Tooltip": "開啟後農夫模式會將種子放入副手而非主手進行種植。"
+  "text.autoconfig.autoharvest.option.farmerOffhandPlant.@Tooltip": "開啟後農夫模式會將種子放入副手而非主手進行種植。",
+  "text.autoconfig.autoharvest.option.maxActionsPerTick": "單 tick 最大操作數",
+  "text.autoconfig.autoharvest.option.maxActionsPerTick.@Tooltip": "每個執行 tick 最多嘗試的世界互動次數（1–64），失敗嘗試也計數。農夫模式收割與補種共用預算；釣魚保持原有時序。",
+  "text.autoconfig.autoharvest.option.rangeSource": "範圍來源",
+  "text.autoconfig.autoharvest.option.rangeSource.@Tooltip": "自訂：使用原有半徑。玩家屬性：方塊使用玩家目前方塊互動距離，動物使用實體互動距離，包含屬性修飾效果。仍受伺服器規則限制。",
+  "text.autoconfig.autoharvest.option.rangeSource.enum.CUSTOM": "自訂半徑",
+  "text.autoconfig.autoharvest.option.rangeSource.enum.PLAYER_ATTRIBUTE": "玩家互動距離屬性",
+  "text.autoconfig.autoharvest.option.swingHand": "互動時揮手",
+  "text.autoconfig.autoharvest.option.swingHand.@Tooltip": "成功的客戶端互動觸發原版揮手，使用實際主手或副手，其他玩家可正常看到。預設關閉；不會阻止伺服器觸發的動畫。"
 }

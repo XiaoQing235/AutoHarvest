@@ -3,6 +3,7 @@ package kite.autoharvest.mode;
 import kite.autoharvest.config.AutoHarvestConfig;
 import kite.autoharvest.util.BoxUtil;
 import kite.autoharvest.util.InteractionHelper;
+import kite.autoharvest.util.InteractionRange;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
@@ -16,7 +17,6 @@ import net.minecraft.tags.ItemTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.Enchantments;
@@ -26,9 +26,9 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.HashSet;
 import java.util.Set;
 
 public class HarvestMode implements AutoMode {
@@ -44,110 +44,117 @@ public class HarvestMode implements AutoMode {
             Blocks.BAMBOO
     );
 
-    private boolean pendingHarvest = false;
-    private BlockPos pendingPos = null;
-    private boolean useInteract = false;
+    private final BoxUtil.ScanCursor scanCursor = new BoxUtil.ScanCursor();
+    private BlockPos pendingPos;
+    private Block pendingBlock;
+    private ClientLevel pendingWorld;
+    private boolean useInteract;
 
     @Override
     public void tick() {
-        // 如果有待执行的收割任务，先执行
-        if (pendingHarvest && pendingPos != null) {
-            ensureFortuneTool();
-            executeHarvest(pendingPos, useInteract);
-            resetPending();
-            return;
-        }
-
         ClientLevel world = BoxUtil.getWorld();
         LocalPlayer player = BoxUtil.getPlayer();
-        if (world == null || player == null) return;
-
-        Vec3 playerPos = BoxUtil.getPlayerPos();
-        if (playerPos == null) return;
-
-        double radius = AutoHarvestConfig.getInstance().getRadius();
-        AABB searchBox = BoxUtil.createSearchBox(playerPos, radius);
-        int radiusInt = (int) Math.ceil(radius);
-
-        for (BlockPos pos : BlockPos.withinManhattan(BlockPos.containing(playerPos), radiusInt, radiusInt, radiusInt)) {
-            if (!searchBox.contains(Vec3.atCenterOf(pos))) continue;
-            if (BoxUtil.isOutsideSphere(pos, playerPos, radius)) continue;
-
-            BlockState state = world.getBlockState(pos);
-            Block block = state.getBlock();
-
-            if (!HARVEST_CROPS.contains(block)) continue;
-
-            if (block == Blocks.SUGAR_CANE) {
-                if (world.getBlockState(pos.below()).is(Blocks.SUGAR_CANE)) continue;
-                if (world.getBlockState(pos.above()).is(Blocks.SUGAR_CANE)) {
-                    tryHarvest(pos.above(), false);
-                    return;
-                }
-            } else if (block == Blocks.BAMBOO) {
-                if (world.getBlockState(pos.below()).is(Blocks.BAMBOO)) continue;
-                if (world.getBlockState(pos.above()).is(Blocks.BAMBOO)) {
-                    if (!hasSword(player)) {
-                        player.sendOverlayMessage(Component.translatable("autoharvest.mode.bamboo.needSword"));
-                        return;
-                    }
-                    ensureSword(player);
-                    InteractionHelper.breakBlock(pos.above(), Direction.UP);
-                    return;
-                }
-            } else if (block == Blocks.SWEET_BERRY_BUSH) {
-                if (isNotFullyGrown(state, block)) continue;
-                tryHarvest(pos, true);
-                return;
-            } else {
-                if (isNotFullyGrown(state, block)) continue;
-                tryHarvest(pos, false);
-                return;
-            }
-        }
-    }
-
-    // 切换时运工具后延迟一个tick再收割，确保游戏更新主手物品效果
-    private void tryHarvest(BlockPos pos, boolean interact) {
-        if (needsFortuneSwitch()) {
-            ensureFortuneTool();
-            pendingHarvest = true;
-            pendingPos = pos;
-            useInteract = interact;
+        if (world == null || player == null) {
+            resetPending();
+            scanCursor.reset();
             return;
         }
-        executeHarvest(pos, interact);
-    }
 
-    private void executeHarvest(BlockPos pos, boolean interact) {
-        if (interact) {
-            InteractionHelper.interactBlock(BoxUtil.getPlayer(), pos, InteractionHand.MAIN_HAND, Direction.UP);
-        } else {
-            InteractionHelper.breakBlock(pos, Direction.UP);
+        int limit = AutoHarvestConfig.maxActionsPerTick();
+        int[] actions = {0};
+        // Resolve the enchantment and inspect hotbar stacks at most once unless a sword swap changes them.
+        int[] fortuneSlot = {-2};
+        Set<BlockPos> attempted = new HashSet<>();
+        if (pendingPos != null) {
+            BlockPos pos = pendingPos;
+            boolean interact = useInteract;
+            boolean valid = pendingWorld == world && isPendingValid(world, pos)
+                    && InteractionRange.canReachBlock(player, pos);
+            resetPending();
+            if (valid) {
+                if (tryHarvest(world, player, pos, interact, fortuneSlot, actions, attempted)) return;
+                if (actions[0] >= limit) return;
+            }
         }
+
+        Vec3 center = InteractionRange.scanCenter(player);
+        double radius = InteractionRange.blockScanRadius(player);
+        BoxUtil.forEachBlockInRange(center, radius, scanCursor, pos -> {
+            BlockState state = world.getBlockState(pos);
+            Block block = state.getBlock();
+            if (!HARVEST_CROPS.contains(block)) return false;
+
+            BlockPos target = pos;
+            if (block == Blocks.SUGAR_CANE || block == Blocks.BAMBOO) {
+                if (world.getBlockState(pos.below()).is(block)
+                        || !world.getBlockState(pos.above()).is(block)) return false;
+                target = pos.above();
+            } else if (isNotFullyGrown(state, block)) {
+                return false;
+            }
+            if (attempted.contains(target) || !InteractionRange.canReachBlock(player, target)) return false;
+
+            if (block == Blocks.BAMBOO) {
+                if (!hasSword(player)) {
+                    player.sendOverlayMessage(Component.translatable("autoharvest.mode.bamboo.needSword"));
+                    return true;
+                }
+                ensureSword(player);
+                fortuneSlot[0] = -2;
+                attempted.add(target.immutable());
+                if (InteractionHelper.breakBlock(target, Direction.UP)) actions[0]++;
+            } else if (tryHarvest(world, player, target, block == Blocks.SWEET_BERRY_BUSH,
+                    fortuneSlot, actions, attempted)) {
+                return true;
+            }
+            return actions[0] >= limit;
+        });
     }
 
-    private boolean needsFortuneSwitch() {
-        if (!AutoHarvestConfig.autoSwitchFortuneTool()) return false;
-        LocalPlayer player = BoxUtil.getPlayer();
-        if (player == null) return false;
-        int fortuneSlot = findFortuneToolSlot(player);
-        return fortuneSlot != -1 && player.getInventory().getSelectedSlot() != fortuneSlot;
-    }
-
-    private void ensureFortuneTool() {
-        if (!AutoHarvestConfig.autoSwitchFortuneTool()) return;
-        LocalPlayer player = BoxUtil.getPlayer();
-        if (player == null) return;
-        int fortuneSlot = findFortuneToolSlot(player);
-        if (fortuneSlot != -1) {
-            player.getInventory().setSelectedSlot(fortuneSlot);
+    // A hotbar switch must settle until the next scheduled mode tick before harvesting.
+    private boolean tryHarvest(ClientLevel world, LocalPlayer player, BlockPos pos, boolean interact,
+                               int[] fortuneSlot, int[] actions, Set<BlockPos> attempted) {
+        if (AutoHarvestConfig.autoSwitchFortuneTool()) {
+            if (fortuneSlot[0] == -2) fortuneSlot[0] = findFortuneToolSlot(player);
+            if (fortuneSlot[0] != -1 && player.getInventory().getSelectedSlot() != fortuneSlot[0]) {
+                player.getInventory().setSelectedSlot(fortuneSlot[0]);
+                pendingPos = pos.immutable();
+                pendingBlock = world.getBlockState(pos).getBlock();
+                pendingWorld = world;
+                useInteract = interact;
+                return true;
+            }
         }
+        attempted.add(pos.immutable());
+        if (executeHarvest(player, pos, interact)) actions[0]++;
+        return false;
+    }
+
+    private boolean executeHarvest(LocalPlayer player, BlockPos pos, boolean interact) {
+        return interact
+                ? InteractionHelper.interactBlock(player, pos, InteractionHand.MAIN_HAND, Direction.UP)
+                : InteractionHelper.breakBlock(pos, Direction.UP);
+    }
+
+    private boolean isPendingValid(ClientLevel world, BlockPos pos) {
+        if (!AutoHarvestConfig.usePlayerRange()) {
+            BlockPos scanPos = pendingBlock == Blocks.SUGAR_CANE ? pos.below() : pos;
+            Vec3 center = BoxUtil.getPlayerPos();
+            if (center == null || BoxUtil.isOutsideSphere(scanPos, center, AutoHarvestConfig.radius())) return false;
+        }
+        BlockState state = world.getBlockState(pos);
+        if (!state.is(pendingBlock)) return false;
+        if (pendingBlock == Blocks.SUGAR_CANE) {
+            return world.getBlockState(pos.below()).is(Blocks.SUGAR_CANE)
+                    && !world.getBlockState(pos.below(2)).is(Blocks.SUGAR_CANE);
+        }
+        return HARVEST_CROPS.contains(pendingBlock) && !isNotFullyGrown(state, pendingBlock);
     }
 
     private void resetPending() {
-        pendingHarvest = false;
         pendingPos = null;
+        pendingBlock = null;
+        pendingWorld = null;
         useInteract = false;
     }
 
@@ -176,8 +183,7 @@ public class HarvestMode implements AutoMode {
             ItemStack stack = player.getInventory().getItem(i);
             if (stack.isEmpty()) continue;
 
-            Item item = stack.getItem();
-            if (isHarvestTool(item)) {
+            if (isHarvestTool(stack)) {
                 ItemEnchantments enchantments =
                         stack.getOrDefault(DataComponents.ENCHANTMENTS, ItemEnchantments.EMPTY);
 
@@ -191,9 +197,7 @@ public class HarvestMode implements AutoMode {
     }
 
 
-    private boolean isHarvestTool(Item item) {
-        if (item == null) return false;
-        ItemStack stack = new ItemStack(item);
+    private boolean isHarvestTool(ItemStack stack) {
         return stack.is(ItemTags.AXES) ||
                 stack.is(ItemTags.SHOVELS) ||
                 stack.is(ItemTags.HOES) ||
@@ -201,6 +205,7 @@ public class HarvestMode implements AutoMode {
     }
 
     private boolean hasSword(LocalPlayer player) {
+        if (player.getMainHandItem().is(ItemTags.SWORDS)) return true;
         for (int i = 0; i < 36; i++) {
             ItemStack stack = player.getInventory().getItem(i);
             if (!stack.isEmpty() && stack.is(ItemTags.SWORDS)) {
@@ -270,6 +275,7 @@ public class HarvestMode implements AutoMode {
 
     @Override
     public void onDisable() {
+        scanCursor.reset();
         resetPending();
     }
 }

@@ -22,6 +22,8 @@ import java.util.Set;
 
 public class BonemealMode implements AutoMode {
 
+    private final BoxUtil.ScanCursor scanCursor = new BoxUtil.ScanCursor();
+
     private static final Set<Block> BONEMEAL_WHITELIST = Set.of(
             Blocks.WHEAT,
             Blocks.CARROTS,
@@ -38,7 +40,7 @@ public class BonemealMode implements AutoMode {
         LocalPlayer player = BoxUtil.getPlayer();
         if (world == null || player == null) return;
 
-        Vec3 playerPos = BoxUtil.getPlayerPos();
+        Vec3 playerPos = InteractionRange.scanCenter(player);
         if (playerPos == null) return;
 
         if (!player.isCreative() && !player.isSpectator() && AutoHarvestConfig.enableRefill()) {
@@ -52,9 +54,11 @@ public class BonemealMode implements AutoMode {
             }
         }
 
-        double radius = AutoHarvestConfig.getInstance().getRadius();
+        double radius = InteractionRange.blockScanRadius(player);
 
-        BoxUtil.forEachBlockInRange(playerPos, radius, pos -> {
+        int[] actions = {0};
+        int limit = AutoHarvestConfig.maxActionsPerTick();
+        BoxUtil.forEachBlockInRange(playerPos, radius, scanCursor, pos -> {
             BlockState state = world.getBlockState(pos);
             Block block = state.getBlock();
 
@@ -62,7 +66,7 @@ public class BonemealMode implements AutoMode {
 
             if (!isNotFullyGrown(state, block)) return false;
 
-            return tryUseBonemeal(player, pos);
+            return tryUseBonemeal(player, pos) && ++actions[0] >= limit;
         });
     }
 
@@ -90,16 +94,14 @@ public class BonemealMode implements AutoMode {
         }
 
         if (hand != null) {
-            InteractionHelper.interactBlock(player, pos, hand, Direction.UP);
-            return true;
+            return InteractionHelper.interactBlock(player, pos, hand, Direction.UP);
         }
 
         int bestSlot = ItemSlotHelper.findNearestSlot(player, Items.BONE_MEAL);
 
         if (bestSlot != -1 && AutoHarvestConfig.autoSwitchHotbar()) {
             player.getInventory().setSelectedSlot(bestSlot);
-            InteractionHelper.interactBlock(player, pos, InteractionHand.MAIN_HAND, Direction.UP);
-            return true;
+            return InteractionHelper.interactBlock(player, pos, InteractionHand.MAIN_HAND, Direction.UP);
         }
 
         return false;
@@ -112,6 +114,6 @@ public class BonemealMode implements AutoMode {
 
     @Override
     public void onDisable() {
-        //nothing
+        scanCursor.reset();
     }
 }

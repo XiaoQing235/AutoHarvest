@@ -2,6 +2,7 @@ package kite.autoharvest.mode;
 
 import kite.autoharvest.config.AutoHarvestConfig;
 import kite.autoharvest.util.BoxUtil;
+import kite.autoharvest.util.InteractionRange;
 import kite.autoharvest.util.InteractionHelper;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -13,6 +14,8 @@ import net.minecraft.world.phys.Vec3;
 import java.util.Set;
 
 public class WeedMode implements AutoMode {
+
+    private final BoxUtil.ScanCursor scanCursor = new BoxUtil.ScanCursor();
     private static final Set<Block> WEED_BLOCKS = Set.of(
             Blocks.SHORT_GRASS,
             Blocks.TALL_GRASS,
@@ -63,14 +66,17 @@ public class WeedMode implements AutoMode {
     @Override
     public void tick() {
         ClientLevel world = BoxUtil.getWorld();
-        if (world == null) return;
+        var player = BoxUtil.getPlayer();
+        if (world == null || player == null) return;
 
-        Vec3 playerPos = BoxUtil.getPlayerPos();
+        Vec3 playerPos = InteractionRange.scanCenter(player);
         if (playerPos == null) return;
 
-        double radius = AutoHarvestConfig.radius();
+        double radius = InteractionRange.blockScanRadius(player);
 
-        BoxUtil.forEachBlockInRange(playerPos, radius, blockPos -> {
+        int[] actions = {0};
+        int limit = AutoHarvestConfig.maxActionsPerTick();
+        BoxUtil.forEachBlockInRange(playerPos, radius, scanCursor, blockPos -> {
             Minecraft client = Minecraft.getInstance();
             Block block = world.getBlockState(blockPos).getBlock();
 
@@ -83,8 +89,7 @@ public class WeedMode implements AutoMode {
             }
 
             if (WEED_BLOCKS.contains(block) && client.gameMode != null) {
-                InteractionHelper.breakBlock(blockPos, Direction.UP);
-                return true;
+                return InteractionHelper.breakBlock(blockPos, Direction.UP) && ++actions[0] >= limit;
             }
             return false;
         });
@@ -97,6 +102,6 @@ public class WeedMode implements AutoMode {
 
     @Override
     public void onDisable() {
-//        Nothing
+        scanCursor.reset();
     }
 }

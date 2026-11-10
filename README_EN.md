@@ -34,13 +34,14 @@ An automatic farming mod for Minecraft.
 
 ### Performance and validation
 
-Block scanning avoids per-position center-vector allocations; hoe mode no longer scans twice; water checks reuse a mutable position and the fetched block state. Large attribute ranges scan at most 4,096 candidate cells per invocation and resume on later active ticks. Ordinary movement retains scan progress and filters candidates against the live position. A completed sweep, a relocation beyond the scan diameter, a world change or a range change restarts it. Farmer replant tracking has size, retry and expiry limits. Newly observed crops are watched for 40 game ticks so a rollback to air can be retried; this is a finite prediction grace period, not server confirmation. Unfinished replant jobs expire after 1,200 ticks, and a full 512-entry queue pauses new seed-bearing harvests.
+Block scanning avoids per-position center-vector allocations; hoe mode no longer scans twice; water checks reuse a mutable position and the fetched block state, including upstream a92220ec's fix to inspect water on the same layer and one layer above. Large attribute ranges scan at most 4,096 candidate cells per invocation and resume on later active ticks. Ordinary movement retains scan progress and filters candidates against the live position. A completed sweep, a relocation beyond the scan diameter, a world change or a range change restarts it. Farmer replant tracking has size, retry and expiry limits. Newly observed crops are watched for 40 game ticks so a rollback to air can be retried; this is a finite prediction grace period, not server confirmation. Unfinished replant jobs expire after 1,200 ticks, and a full 512-entry queue pauses new seed-bearing harvests.
 
 Standalone regression checks require Python 3 and JDK 21+ and do not invoke Gradle:
 
 ```bash
 python scripts/test_scans.py
 python scripts/test_interactions.py
+python scripts/test_water.py
 ```
 
 These checks use minimal API stubs and do not validate real Minecraft API compatibility or gameplay. No Gradle build/compile was run, as required by `AGENTS.md`. Fabric/NeoForge builds and client/multiplayer testing remain manual. Start with one action and increase gradually, following the server's rules.

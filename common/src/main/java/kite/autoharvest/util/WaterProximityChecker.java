@@ -39,10 +39,10 @@ public final class WaterProximityChecker {
 
     public static boolean hasNoWaterNearby(Level world, BlockPos pos) {
         BlockPos.MutableBlockPos checkPos = new BlockPos.MutableBlockPos();
-        for (int dx = -4; dx <= 4; dx++) {
-            for (int dz = -4; dz <= 4; dz++) {
-                {
-                    checkPos.set(pos.getX() + dx, pos.getY(), pos.getZ() + dz);
+        for (int dy = 0; dy <= 1; dy++) {
+            for (int dx = -4; dx <= 4; dx++) {
+                for (int dz = -4; dz <= 4; dz++) {
+                    checkPos.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
                     var state = world.getBlockState(checkPos);
                     var fluidState = state.getFluidState();
                     if (fluidState.is(FluidTags.WATER) && fluidState.isSource()) {

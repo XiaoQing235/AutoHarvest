@@ -1,5 +1,6 @@
 package kite.autoharvest.config;
 
+import com.google.gson.annotations.JsonAdapter;
 import me.shedaniel.autoconfig.AutoConfig;
 import me.shedaniel.autoconfig.ConfigData;
 import me.shedaniel.autoconfig.annotation.Config;
@@ -17,8 +18,8 @@ public class AutoHarvestConfig implements ConfigData {
     public int maxActionsPerTick = 1;
 
     @ConfigEntry.Gui.Tooltip
-    @ConfigEntry.Gui.EnumHandler
-    public RangeSource rangeSource = RangeSource.CUSTOM;
+    @JsonAdapter(RangeSourceAdapter.class)
+    public boolean rangeSource = false;
 
     @ConfigEntry.Gui.Tooltip
     public boolean swingHand = false;
@@ -85,7 +86,7 @@ public class AutoHarvestConfig implements ConfigData {
     }
 
     public static boolean usePlayerRange() {
-        return getInstance().rangeSource == RangeSource.PLAYER_ATTRIBUTE;
+        return getInstance().rangeSource;
     }
 
     public static boolean swingHand() {

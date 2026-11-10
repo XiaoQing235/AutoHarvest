@@ -24,7 +24,7 @@
   "text.autoconfig.autoharvest.option.fishingRodProtection": "Fishing Rod Protection",
   "text.autoconfig.autoharvest.option.fishingRodProtection.@Tooltip": "Automatically stops fishing when the fishing rod's durability is too low.",
   "text.autoconfig.autoharvest.option.radiusCenti": "Interaction Radius",
-  "text.autoconfig.autoharvest.option.radiusCenti.@Tooltip": "Custom-mode scan radius in tenths of a block (10–65). Example: 45 = 4.5 blocks. Retained but ignored in player-attribute mode.",
+  "text.autoconfig.autoharvest.option.radiusCenti.@Tooltip": "Used when rangeSource is false, in tenths of a block (10–65). Example: 45 = 4.5 blocks. Retained but ignored when rangeSource is true.",
   "text.autoconfig.autoharvest.option.rememberMode": "Remember Last Mode",
   "text.autoconfig.autoharvest.option.rememberMode.@Tooltip": "When AutoHarvest is toggled on, it restores the last used mode automatically.",
   "text.autoconfig.autoharvest.option.thecurrentMode": "Current Mode",
@@ -53,10 +53,8 @@
   "text.autoconfig.autoharvest.option.farmerOffhandPlant.@Tooltip": "When enabled, Farmer mode places seeds into the offhand instead of the main hand.",
   "text.autoconfig.autoharvest.option.maxActionsPerTick": "Maximum Actions per Active Tick",
   "text.autoconfig.autoharvest.option.maxActionsPerTick.@Tooltip": "Maximum dispatched world interactions on each action tick (1–64). Failed attempts also count. Farmer planting and harvesting share this budget. Fishing retains its original timing.",
-  "text.autoconfig.autoharvest.option.rangeSource": "Range Source",
-  "text.autoconfig.autoharvest.option.rangeSource.@Tooltip": "Custom: use the existing radius setting. Player attribute: read current block interaction range for blocks and entity interaction range for animals, including attribute modifiers. Server rules still apply.",
-  "text.autoconfig.autoharvest.option.rangeSource.enum.CUSTOM": "Custom radius",
-  "text.autoconfig.autoharvest.option.rangeSource.enum.PLAYER_ATTRIBUTE": "Player interaction attributes",
+  "text.autoconfig.autoharvest.option.rangeSource": "Use Player Interaction Range",
+  "text.autoconfig.autoharvest.option.rangeSource.@Tooltip": "true (Yes): use current player range attributes, block interaction range for blocks and entity interaction range for animals, including modifiers. false (No, default): use radiusCenti from the config file. Server rules still apply.",
   "text.autoconfig.autoharvest.option.swingHand": "Swing Hand",
   "text.autoconfig.autoharvest.option.swingHand.@Tooltip": "Send a normal vanilla hand swing for successful client-side interactions. Uses the actual main/off hand; visible to other players normally. Disabled by default. Server-triggered animations are not suppressed."
 }

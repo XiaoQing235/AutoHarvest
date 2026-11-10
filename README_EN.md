@@ -28,7 +28,7 @@ An automatic farming mod for Minecraft.
 
 ## 26.2 branch settings
 
-- **Range source (`rangeSource`)** defaults to `CUSTOM`, preserving `radiusCenti` (10–65, or 1–6.5 blocks) and existing config files. `PLAYER_ATTRIBUTE` reads the player's current `blockInteractionRange()` for blocks and `entityInteractionRange()` for feeding/shearing, including attribute modifiers. Execution uses vanilla reach checks, without applying the custom radius or a hidden reach cap. Server rules still apply.
+- **Use player interaction range (`rangeSource`)** is a boolean toggle, default `false`. `false` uses `radiusCenti` from the config file (10–65, or 1–6.5 blocks). `true` reads the player's current range attributes: `blockInteractionRange()` for blocks and `entityInteractionRange()` for feeding/shearing, including modifiers. The enabled setting uses vanilla reach checks without applying the custom radius or a hidden reach cap. Server rules still apply. Legacy `CUSTOM`/`PLAYER_ATTRIBUTE` values migrate automatically to `false`/`true`, preserving the existing radius and all other settings.
 - **Maximum actions per active tick (`maxActionsPerTick`)** is 1–64, default 1. `ticksPerAction` still controls the interval between batches. A single scan processes distinct targets and counts dispatched attempts, not server-confirmed successes. Farmer harvesting and replanting share this budget (with the default 1, they run on separate ticks). Inventory refill/switching is not a world action. Fortune-tool switching still waits until the next scheduled invocation. Fishing's state machine and timing are unchanged.
 - **Swing hand (`swingHand`)** defaults to false. When enabled, successful client-side interactions use the vanilla swing for the actual hand, normally visible to other players. No extra custom swing packets are sent. Server-triggered animations cannot be suppressed. Feeding's former unconditional swing now follows this setting too.
 
@@ -43,5 +43,7 @@ python scripts/test_scans.py
 python scripts/test_interactions.py
 python scripts/test_water.py
 ```
+
+Config migration checks additionally need an existing Gson JAR: `python scripts/test_config.py /path/to/gson.jar`. They use real Gson to verify legacy enum migration, boolean save/reload, preservation of other settings, and switching block/entity distance sources.
 
 These checks use minimal API stubs and do not validate real Minecraft API compatibility or gameplay. No Gradle build/compile was run, as required by `AGENTS.md`. Fabric/NeoForge builds and client/multiplayer testing remain manual. Start with one action and increase gradually, following the server's rules.

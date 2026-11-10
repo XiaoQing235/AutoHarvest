@@ -28,7 +28,7 @@
 
 ## 26.2 分支配置
 
-- **范围来源 `rangeSource`**：默认 `CUSTOM`，继续使用现有 `radiusCenti`（10–65，表示 1–6.5 格），不重置旧配置。选择 `PLAYER_ATTRIBUTE` 后，方块交互实时读取玩家的 `blockInteractionRange()`，喂食/剪羊毛读取 `entityInteractionRange()`，包含装备、效果等属性修饰。使用原版范围判断，不额外套用自定义半径或隐藏上限；客户端无法绕过服务器规则。
+- **使用玩家交互距离 `rangeSource`**：布尔开关，默认 `false`。`false` 使用配置文件中的 `radiusCenti`（10–65，表示 1–6.5 格）；`true` 实时读取玩家的 range 属性，方块交互使用 `blockInteractionRange()`，喂食/剪羊毛使用 `entityInteractionRange()`，包含装备、效果等属性修饰。启用时不额外套用自定义半径或隐藏上限；客户端无法绕过服务器规则。旧配置中的 `CUSTOM`/`PLAYER_ATTRIBUTE` 会自动转换为 `false`/`true`，保留已有半径和其他配置。
 - **单 tick 最大操作数 `maxActionsPerTick`**：1–64，默认 1。`ticksPerAction` 仍控制两批操作的间隔，每个执行 tick 使用一次扫描处理多个不同目标。预算统计已发送的交互尝试，不保证服务器接受；农夫模式收割和补种共享预算（默认 1 时分不同 tick 完成）。补给/切换物品不计为世界交互。时运工具切换仍延迟到下一次执行，钓鱼状态机与收杆/抛竿间隔不加速。
 - **交互时挥手 `swingHand`**：默认关闭。启用时遵循原版交互结果，以实际主手/副手调用原版挥手，其他玩家可正常看到。无重复自制动画包；无法屏蔽服务器自行触发的动画。喂食原有的无条件挥手也改为受此开关控制。
 
@@ -43,5 +43,7 @@ python scripts/test_scans.py
 python scripts/test_interactions.py
 python scripts/test_water.py
 ```
+
+配置迁移检查另需现有的 Gson JAR：`python scripts/test_config.py /path/to/gson.jar`。它使用真实 Gson 检查旧枚举到布尔值的迁移、保存/重读、其他配置保留，以及切换后的方块/实体距离来源。
 
 这些检查使用最小 API 替身验证工具逻辑，不代表真实 Minecraft API 编译或游戏内测试。遵循 `AGENTS.md`，本次未运行任何 Gradle 构建/编译；Fabric 与 NeoForge 构建及客户端/多人服验证仍需手动完成。建议先以 1 次操作测试，再逐步提高预算，并遵守服务器规定。

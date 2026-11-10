@@ -63,12 +63,14 @@ public class HoeMode implements AutoMode {
                 int bestSlot = ItemSlotHelper.findNearestSlot(player, HOES, true);
                 if (bestSlot != -1 && AutoHarvestConfig.autoSwitchHotbar()) {
                     player.getInventory().setSelectedSlot(bestSlot);
+                    scanCursor.rememberTarget(pos);
                 }
                 // Keep the existing one-tick delay after a hotbar switch.
                 return true;
             }
-            return InteractionHelper.interactBlock(player, pos, usedHand, Direction.UP)
-                    && ++actions[0] >= limit;
+            if (!InteractionHelper.interactBlock(player, pos, usedHand, Direction.UP)) return false;
+            scanCursor.rememberTarget(pos);
+            return ++actions[0] >= limit;
         });
     }
 

@@ -22,7 +22,16 @@ public class AutoHarvestConfig {
     public static boolean swingHand() { return swing; }
     public static double radius() { return custom; }
 }''',
-    'net.minecraft.core.BlockPos': 'public record BlockPos(int x, int y, int z) {}',
+    'net.minecraft.core.BlockPos': '''
+public class BlockPos {
+    private int x,y,z;
+    public BlockPos(int x,int y,int z) { set(x,y,z); }
+    public int x() { return x; }
+    public int y() { return y; }
+    public int z() { return z; }
+    public void set(int x,int y,int z) { this.x=x;this.y=y;this.z=z; }
+    public BlockPos immutable() { return new BlockPos(x,y,z); }
+}''',
     'net.minecraft.core.Direction': 'public enum Direction { UP }',
     'net.minecraft.world.InteractionHand': 'public enum InteractionHand { MAIN_HAND, OFF_HAND }',
     'net.minecraft.world.InteractionResult': '''
@@ -87,13 +96,14 @@ public class Minecraft {
     public static class GameMode {
         public int calls;
         public boolean breakAccepted;
+        public BlockPos retainedBlock;
         public InteractionHand usedHand;
         public InteractionResult result = new InteractionResult.Fail();
         private InteractionResult use(InteractionHand hand) { calls++; usedHand=hand; return result; }
-        public InteractionResult useItemOn(LocalPlayer p, InteractionHand h, BlockHitResult hit) { return use(h); }
+        public InteractionResult useItemOn(LocalPlayer p, InteractionHand h, BlockHitResult hit) { retainedBlock=hit.pos(); return use(h); }
         public InteractionResult useItem(LocalPlayer p, InteractionHand h) { return use(h); }
         public InteractionResult interact(LocalPlayer p, Entity e, EntityHitResult hit, InteractionHand h) { return use(h); }
-        public boolean startDestroyBlock(BlockPos pos, Direction side) { calls++; return breakAccepted; }
+        public boolean startDestroyBlock(BlockPos pos, Direction side) { retainedBlock=pos; calls++; return breakAccepted; }
     }
 }''',
 }
@@ -177,6 +187,15 @@ public class InteractionTests {
         gm.breakAccepted = true;
         check(InteractionHelper.breakBlock(pos, Direction.UP), "accepted break dispatched");
         check(p.swings == 4 && p.swungHand == InteractionHand.MAIN_HAND, "accepted break main-hand swing");
+        BlockPos borrowed = new BlockPos(3, 4, 5);
+        InteractionHelper.breakBlock(borrowed, Direction.UP);
+        borrowed.set(8, 9, 10);
+        check(gm.retainedBlock.x() == 3 && gm.retainedBlock.y() == 4 && gm.retainedBlock.z() == 5,
+            "destroy target owns stable position after scan advances");
+        InteractionHelper.interactBlock(p, borrowed, off, Direction.UP);
+        borrowed.set(20, 21, 22);
+        check(gm.retainedBlock.x() == 8 && gm.retainedBlock.y() == 9 && gm.retainedBlock.z() == 10,
+            "use target owns stable position after scan advances");
         int calls = gm.calls;
         p.blockReach = p.entityReach = false;
         check(!InteractionHelper.interactBlock(p, pos, off, Direction.UP)

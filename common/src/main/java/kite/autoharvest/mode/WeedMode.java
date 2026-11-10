@@ -89,7 +89,9 @@ public class WeedMode implements AutoMode {
             }
 
             if (WEED_BLOCKS.contains(block) && client.gameMode != null) {
-                return InteractionHelper.breakBlock(blockPos, Direction.UP) && ++actions[0] >= limit;
+                if (!InteractionHelper.breakBlock(blockPos, Direction.UP)) return false;
+                scanCursor.rememberTarget(blockPos);
+                return ++actions[0] >= limit;
             }
             return false;
         });

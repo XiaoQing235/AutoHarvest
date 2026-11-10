@@ -21,6 +21,8 @@ public final class InteractionHelper {
     public static boolean interactBlock(LocalPlayer player, BlockPos blockPos, InteractionHand hand, Direction side) {
         Minecraft client = Minecraft.getInstance();
         if (client.gameMode == null || player == null || !InteractionRange.canReachBlock(player, blockPos)) return false;
+        // Scans borrow a MutableBlockPos; vanilla may retain the interaction target.
+        blockPos = blockPos.immutable();
         Vec3 hitPos = Vec3.atCenterOf(blockPos);
         BlockHitResult hitResult = new BlockHitResult(hitPos, side, blockPos, false);
         swingIfNeeded(player, hand, client.gameMode.useItemOn(player, hand, hitResult));
@@ -31,6 +33,7 @@ public final class InteractionHelper {
         Minecraft client = Minecraft.getInstance();
         LocalPlayer player = client.player;
         if (client.gameMode == null || player == null || !InteractionRange.canReachBlock(player, blockPos)) return false;
+        blockPos = blockPos.immutable();
         if (client.gameMode.startDestroyBlock(blockPos, side) && AutoHarvestConfig.swingHand()) {
             player.swing(InteractionHand.MAIN_HAND);
         }

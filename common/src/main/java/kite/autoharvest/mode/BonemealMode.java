@@ -66,7 +66,9 @@ public class BonemealMode implements AutoMode {
 
             if (!isNotFullyGrown(state, block)) return false;
 
-            return tryUseBonemeal(player, pos) && ++actions[0] >= limit;
+            if (!tryUseBonemeal(player, pos)) return false;
+            scanCursor.rememberTarget(pos);
+            return ++actions[0] >= limit;
         });
     }
 

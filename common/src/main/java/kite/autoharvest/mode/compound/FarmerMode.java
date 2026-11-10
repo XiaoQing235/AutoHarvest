@@ -224,7 +224,10 @@ public class FarmerMode implements AutoMode {
                 return true;
             }
             attempted.add(targetPos);
-            if (executeHarvest(world, player)) remaining[0]--;
+            if (executeHarvest(world, player)) {
+                remaining[0]--;
+                scanCursor.rememberTarget(pos);
+            }
             clearTarget();
             return remaining[0] <= 0;
         });

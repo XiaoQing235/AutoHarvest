@@ -200,7 +200,9 @@ public class PlantMode implements AutoMode {
             boolean attempted = canPlantCocoa
                     ? InteractionHelper.interactBlock(player, cocoaLogPos, usedHand, cocoaFacing)
                     : InteractionHelper.interactBlock(player, basePos, usedHand, Direction.UP);
-            return attempted && ++actions[0] >= limit;
+            if (!attempted) return false;
+            scanCursor.rememberTarget(pos);
+            return ++actions[0] >= limit;
         });
     }
 

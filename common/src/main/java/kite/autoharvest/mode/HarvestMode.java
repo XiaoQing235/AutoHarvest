@@ -102,10 +102,15 @@ public class HarvestMode implements AutoMode {
                 ensureSword(player);
                 fortuneSlot[0] = -2;
                 attempted.add(target.immutable());
-                if (InteractionHelper.breakBlock(target, Direction.UP)) actions[0]++;
-            } else if (tryHarvest(world, player, target, block == Blocks.SWEET_BERRY_BUSH,
-                    fortuneSlot, actions, attempted)) {
-                return true;
+                if (InteractionHelper.breakBlock(target, Direction.UP)) {
+                    actions[0]++;
+                    scanCursor.rememberTarget(pos);
+                }
+            } else {
+                int before = actions[0];
+                if (tryHarvest(world, player, target, block == Blocks.SWEET_BERRY_BUSH,
+                        fortuneSlot, actions, attempted)) return true;
+                if (actions[0] > before) scanCursor.rememberTarget(pos);
             }
             return actions[0] >= limit;
         });
